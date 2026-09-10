@@ -35,27 +35,29 @@ on each snapshot. For example,
 
 ## Installation
 
-Antigravity discovers plugins by directory — there's no marketplace or
-git-URL install — so clone this repo and point Antigravity at its
-`plugin/` directory.
+With the `agy` CLI, install straight from this repo:
+
+```bash
+agy plugin install https://github.com/jshute96/SeeWhatISee-antigravity
+```
+
+To update, run that same command again — `agy` has no plugin update
+mechanism, and a reinstall is the only way to pick up a new version.
+
+To uninstall: `agy plugin uninstall see-what-i-see`.
+
+Antigravity also discovers plugins by directory, so you can instead clone
+this repo and copy or symlink it into one of these:
+
+| Scope          | Path                                          |
+|----------------|-----------------------------------------------|
+| All workspaces | `~/.gemini/config/plugins/see-what-i-see`     |
+| One workspace  | `<workspace>/.agents/plugins/see-what-i-see`  |
 
 ```bash
 git clone https://github.com/jshute96/SeeWhatISee-antigravity.git
-```
-
-Then pick one of:
-
-| Scope            | How                                                                       |
-|------------------|---------------------------------------------------------------------------|
-| All workspaces   | Copy or symlink `plugin/` to `~/.gemini/config/plugins/see-what-i-see`     |
-| One workspace    | Copy or symlink `plugin/` to `<workspace>/.agents/plugins/see-what-i-see`  |
-| `agy` CLI        | `agy plugin install <clone>/plugin`                                       |
-
-For example, to install globally from a clone:
-
-```bash
 mkdir -p ~/.gemini/config/plugins
-ln -s "$(pwd)/SeeWhatISee-antigravity/plugin" ~/.gemini/config/plugins/see-what-i-see
+ln -s "$(pwd)/SeeWhatISee-antigravity" ~/.gemini/config/plugins/see-what-i-see
 ```
 
 ## Development
