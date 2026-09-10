@@ -14,14 +14,13 @@ SeeWhatISee is the ultimate Chrome extension screenshot tool for vibe-coding: Sh
 Learn more at https://github.com/jshute96/SeeWhatISee.
 Development happens in that repository.  Issues and PRs should be filed in that repository.
 
-This GitHub project is the released version of the plugin for
-[Google Antigravity](https://antigravity.google) — Google's agent-first IDE
-and its companion `agy` CLI.
+This GitHub project is the released version of the SeeWhatISee plugin for
+[Google Antigravity](https://antigravity.google).
 
 ## Antigravity skills
 
 - `/see-what-i-see` — read the latest snapshot and describe it
-- `/see-what-i-see-watch` — watch for new snapshots to appear, and then look at them when they appear
+- `/see-what-i-see-watch` — watch for new snapshots to appear in the background, and then look at them when they appear
 - `/see-what-i-see-stop` — stop a running watch loop
 - `/see-what-i-see-history` — find and analyze past snapshots
 
@@ -63,8 +62,8 @@ ln -s "$(pwd)/SeeWhatISee-antigravity" ~/.gemini/config/plugins/see-what-i-see
 ## Development
 
 This GitHub project stores the released version of the Antigravity plugin.
-
-The development project is https://github.com/jshute96/SeeWhatISee.
+It is a mirror: every file here is copied out of `skills/release-antigravity/` in the
+development project, https://github.com/jshute96/SeeWhatISee, so edit it there.
 
 This project can be used alone for experimentation.
 
