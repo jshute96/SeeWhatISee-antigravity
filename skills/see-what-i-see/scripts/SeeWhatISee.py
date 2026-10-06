@@ -9,10 +9,15 @@ All actions a skill can take collapse to flags on this one script:
 
 Multiple actions combine and run in that order.
 
+--list-unlinked-files is a standalone maintenance action: it prints the
+files in the source dir that no capture record references.
+
 History spans more than log.json: the extension keeps only the most
 recent captures there and moves older ones into `history-*.json` files
-beside it (see src/capture/log-store.ts). --all reads those history
-files oldest-first and then log.json. --limit N instead walks from
+beside it (see src/capture/log-store.ts), and lists them in
+`history-files.json`, which can also name files elsewhere under the
+source dir. --all reads those history files oldest-first and then
+log.json. --limit N instead walks from
 log.json backwards through them and stops as soon as it has N records,
 so it opens only the files it needs. Either way the emitted
 stream is in capture order, oldest first. --search / --filter_site /
@@ -145,6 +150,12 @@ Actions (combinable; run in this order):
   --limit N            Emit up to the N most recent records, oldest first.
   --watch              Watch log.json and emit new records as they arrive.
 
+Standalone action (cannot be combined with the actions above):
+  --list-unlinked-files
+                       List files in the download dir that no record in the
+                       capture history references, one absolute path per line.
+                       Cannot be combined with other actions.
+
 Options for the history listing:
   --search "words"     Show records where all words in the search string
                        appear in the url, title, or prompt (case-insensitive).
@@ -233,6 +244,7 @@ class Options:
         self.after = None
         self.catch_up_one = False
         self.print_selection = False
+        self.list_unlinked = False
 
 
 def parse_args(argv):
@@ -280,6 +292,8 @@ def parse_args(argv):
             opts.watch = any_action = True
         elif arg == "--stop":
             opts.stop = any_action = True
+        elif arg == "--list-unlinked-files":
+            opts.list_unlinked = any_action = True
         elif arg == "--directory":
             opts.directory = value(arg, rest)
         elif arg == "--copy-to-dir":
@@ -328,6 +342,13 @@ def parse_args(argv):
 
 
 def validate(opts):
+    # A maintenance listing of files, not records: the record actions and
+    # the options that shape emitted records would do nothing with it.
+    if opts.list_unlinked:
+        if (opts.get_latest or opts.list or opts.watch or opts.stop
+                or opts.copy_to_dir is not None or opts.print_selection):
+            die("Error: --list-unlinked-files cannot be combined with other "
+                "actions", 2)
     # These three modify watch behavior only — passing them without
     # --watch would silently do nothing, which is the kind of "looks
     # like it worked" failure that wastes debugging time.
@@ -553,6 +574,56 @@ def read_lines(path, fatal=False):
 # ---------------------------------------------------------------------------
 
 
+# See history_files() for why only stamp-shaped names count.
+HISTORY_FILE_NAME = re.compile(r"history-[\d-]*\.json")
+
+# The history index: a JSON array of history file paths relative to the
+# source dir, written by the extension on every flush. It keeps history
+# files findable where the extension can't list the directory; see
+# docs/log-consistency.md -> "The history index".
+HISTORY_INDEX_FILE = "history-files.json"
+
+
+def history_index_entry(entry):
+    """True if `entry` is a usable history index entry.
+
+    A `.json` path relative to the source dir, `/`-separated. Subdirs
+    are allowed; `..`, `.`, empty segments, a leading `/`, backslashes
+    and `:` are not, so an entry can't point outside the dir (on
+    Windows, `D:x.json` names another drive). No directory may be named
+    SeeWhatISee, and log.json and the index are refused in any case.
+    The extension applies the same rule (`isHistoryIndexEntry` in
+    src/capture/downloads.ts); keep the two in step.
+    """
+    if not isinstance(entry, str) or not entry.endswith(".json"):
+        return False
+    if "\\" in entry or ":" in entry or entry.startswith("/"):
+        return False
+    segs = entry.split("/")
+    if any(seg in ("", ".", "..") for seg in segs):
+        return False
+    if any(seg.lower() == "seewhatisee" for seg in segs[:-1]):
+        return False
+    return entry.lower() not in ("log.json", HISTORY_INDEX_FILE)
+
+
+def history_index(source_dir):
+    """The history index's valid entries, or [] if it's missing or bad.
+
+    Lenient, like every reader here: the file sits in the user's
+    Downloads folder and may be hand-edited.
+    """
+    try:
+        with open(os.path.join(source_dir, HISTORY_INDEX_FILE),
+                  encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in value if history_index_entry(entry)]
+
+
 def history_files(source_dir, log_path):
     """The files holding the capture history, oldest first.
 
@@ -563,17 +634,24 @@ def history_files(source_dir, log_path):
     order. Only stamp-shaped names (digits and hyphens) count: a
     word-y `history-notes.json` is someone else's file, and would land
     at an arbitrary spot in that order. The extension's directory
-    listing applies the same rule (`HISTORY_FILE_NAME`); keep the two
-    in step.
+    listing applies the same rule (`HISTORY_FILE_NAME` in
+    src/capture/downloads.ts); keep the two in step.
+
+    The entries of the history index that exist are added to what the
+    scan finds. They sort by file name, not path, so one in a subdir
+    takes its place by stamp; a name that isn't stamp-shaped lands
+    wherever it sorts.
     """
     try:
         names = os.listdir(source_dir)
     except OSError:
         names = []
-    older = [name for name in names
-             if re.fullmatch(r"history-[\d-]*\.json", name)]
-    older.sort()
-    files = [os.path.join(source_dir, name) for name in older]
+    older = {name for name in names if HISTORY_FILE_NAME.fullmatch(name)}
+    for entry in history_index(source_dir):
+        if os.path.isfile(os.path.join(source_dir, *entry.split("/"))):
+            older.add(entry)
+    ordered = sorted(older, key=lambda entry: (entry.rsplit("/", 1)[-1], entry))
+    files = [os.path.join(source_dir, *entry.split("/")) for entry in ordered]
     if os.path.isfile(log_path):
         files.append(log_path)
     return files
@@ -871,6 +949,50 @@ def list_history(opts, emitter, source_dir, log_path):
             break
     for record in reversed(collected):
         emitter.emit(record)
+
+
+def managed_file(name):
+    """True for a file the extension or this script keeps in the source dir
+    for its own bookkeeping, rather than a capture's artifact."""
+    return (name in ("log.json", HISTORY_INDEX_FILE)
+            or HISTORY_FILE_NAME.fullmatch(name) is not None
+            or name in (STATUS_FILE, PID_FILE, STOP_FILE)
+            or (name.startswith(STATUS_FILE + ".") and name.endswith(".tmp")))
+
+
+def list_unlinked_files(source_dir, log_path):
+    """--list-unlinked-files: files no record in the history references.
+
+    Walks every record in log.json and the history files, tombstones
+    included (they carry no filenames, so they reference nothing), and
+    prints each remaining regular file in the source dir, sorted.
+    Subdirectories are not descended into or listed.
+    """
+    try:
+        names = os.listdir(source_dir)
+    except OSError as err:
+        die("Error: cannot list %s: %s" % (source_dir, err.strerror), 2)
+    # With no history at all, every file would read as unlinked. That
+    # is far more likely a wrong --directory than a real answer.
+    files = history_files(source_dir, log_path)
+    if not files:
+        die("Error: no log.json or history files in %s" % source_dir, 2)
+    referenced = set()
+    for path in files:
+        for record in read_records(path):
+            for key in ARTIFACT_KEYS:
+                artifact = record.get(key)
+                if isinstance(artifact, dict) and isinstance(
+                        artifact.get("filename"), str):
+                    referenced.add(artifact["filename"])
+    for name in sorted(names):
+        path = os.path.join(source_dir, name)
+        # `path in files` covers a history file the index lists under a
+        # name of its own.
+        if name in referenced or managed_file(name) or path in files:
+            continue
+        if os.path.isfile(path):
+            print(path)
 
 
 # ---------------------------------------------------------------------------
@@ -1645,6 +1767,10 @@ def main(argv):
     source_dir = resolve_dir(opts)
     log_path = os.path.join(source_dir, "log.json")
     emitter = Emitter(opts, source_dir)
+
+    if opts.list_unlinked:
+        list_unlinked_files(source_dir, log_path)
+        return
 
     if opts.stop:
         result = stop_watcher(source_dir, queue=not opts.watch)
